@@ -48,6 +48,9 @@ func TestAPIContracts(t *testing.T) {
 		handler                  gin.HandlerFunc
 	}{
 		{"models", "GET", "", "claude-sonnet-4-6", ListModels},
+		{"models sonnet 5.5", "GET", "", "claude-sonnet-5-5", ListModels},
+		{"models opus 5.5", "GET", "", "claude-opus-5-5", ListModels},
+		{"models 5.5 thinking", "GET", "", "claude-opus-5-5-thinking", ListModels},
 		{"chat single", "POST", `{"messages":[{"role":"user","content":"hi"}]}`, `"chat.completion"`, OpenAIChat},
 		{"chat multi image stream", "POST", `{"stream":true,"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"answer"},{"role":"user","content":[{"type":"text","text":"image"},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}}]}]}`, "data: [DONE]", OpenAIChat},
 		{"chat image url", "POST", `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}]}]}`, `"chat.completion"`, OpenAIChat},
@@ -82,6 +85,65 @@ func TestAPIContracts(t *testing.T) {
 	}
 }
 
+func TestListModelsIncludesClaude55Family(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/v1/models", nil)
+	ListModels(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, id := range []string{
+		"claude-sonnet-4-6", "claude-sonnet-4-6-thinking",
+		"claude-haiku-4-5-20251001", "claude-sonnet-5",
+		"claude-sonnet-5-5", "claude-sonnet-5-5-thinking",
+		"claude-opus-5-5", "claude-opus-5-5-thinking",
+	} {
+		if !strings.Contains(body, `"id":"`+id+`"`) {
+			t.Fatalf("GET /v1/models missing %s: %s", id, body)
+		}
+	}
+}
+
+func TestModelAliasForwarding(t *testing.T) {
+	old := runner
+	t.Cleanup(func() { runner = old })
+
+	cases := []struct {
+		name, body, want string
+		handler          gin.HandlerFunc
+	}{
+		{"chat sonnet 5.5 alias", `{"model":"claude-sonnet-5.5-thinking","messages":[{"role":"user","content":"hi"}]}`, "claude-sonnet-5-5-thinking", OpenAIChat},
+		{"responses opus 5.5 alias", `{"model":"opus-5-5","input":"hi"}`, "claude-opus-5-5", OpenAIResponses},
+		{"messages sonnet 5.5 dated", `{"model":"claude-sonnet-5-5-20260928","messages":[{"role":"user","content":"hi"}]}`, "claude-sonnet-5-5", AnthropicMessages},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			runner = testRunner(func(model string, _ service.Prompt, emit func(string)) (service.CompletionResult, error) {
+				got = model
+				emit("ok")
+				return service.CompletionResult{StatusCode: http.StatusOK}, nil
+			})
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest("POST", "/v1", strings.NewReader(tc.body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			tc.handler(c)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if got != tc.want {
+				t.Fatalf("runner model=%q want %q", got, tc.want)
+			}
+			if !strings.Contains(w.Body.String(), tc.want) {
+				t.Fatalf("response should echo canonical model %s: %s", tc.want, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestUpstreamStatus(t *testing.T) {
 	old := runner
 	runner = testRunner(func(string, service.Prompt, func(string)) (service.CompletionResult, error) {
@@ -96,5 +158,37 @@ func TestUpstreamStatus(t *testing.T) {
 	OpenAIChat(c)
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAnthropicCountTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"claude-sonnet-5-5","messages":[{"role":"user","content":"hello world"}]}`))
+	AnthropicCountTokens(c)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"input_tokens"`) {
+		t.Fatalf("unexpected response %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAnthropicStreamUpstreamStatusBeforeOutput(t *testing.T) {
+	old := runner
+	runner = testRunner(func(string, service.Prompt, func(string)) (service.CompletionResult, error) {
+		return service.CompletionResult{StatusCode: http.StatusTooManyRequests}, &service.CompletionError{StatusCode: http.StatusTooManyRequests, Err: errors.New("rate limited")}
+	})
+	defer func() { runner = old }()
+	for _, body := range []string{
+		`{"model":"claude-sonnet-5-5","stream":true,"messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"claude-sonnet-5-5","stream":true,"tools":[{"name":"get_weather","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"hi"}]}`,
+	} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		AnthropicMessages(c)
+		if w.Code != http.StatusTooManyRequests || strings.Contains(w.Body.String(), "message_start") {
+			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+		}
 	}
 }

@@ -86,8 +86,20 @@ sk-ant-sid01-yyyyyyyy
 - `claude-sonnet-4-6`
 - `claude-haiku-4-5-20251001`
 - `claude-sonnet-5`
+- `claude-sonnet-5-5`
+- `claude-opus-5-5`
 
-实际可用性取决于账号权限和 Claude.ai 上游状态，请以 `GET /v1/models` 的返回结果为准。
+客户端也可以发送常见别名，网关会归一化后再转发给 Claude.ai，例如：
+
+- `claude-sonnet-5.5` / `sonnet-5-5` / `claude-sonnet-5-5-20260928` / `anthropic.claude-sonnet-5-5` → `claude-sonnet-5-5`
+- `claude-opus-5.5` / `opus-5-5` / `claude-opus-5-5-20260922` / `anthropic.claude-opus-5-5` → `claude-opus-5-5`
+- `claude-haiku-4-5` → `claude-haiku-4-5-20251001`
+- 任意模型加上 `-thinking` 后缀（如 `claude-opus-5-5-thinking`）仍会开启扩展思考
+- Claude Code / Codex 常见的 `[1m]`、Bedrock `anthropic.` / `us.` 前缀也会被识别
+
+空 `model` 仍然默认 `claude-sonnet-4-6`。实际可用性取决于账号权限和 Claude.ai 上游状态，请以 `GET /v1/models` 的返回结果为准。
+
+> Claude.ai 网页接口使用的内部模型名默认与公开 API ID 相同（与现有的 `claude-sonnet-5`、`claude-sonnet-4-6` 转发方式一致）。若线上账号拒绝该 ID，可在 `config.yaml` 中设置 `claude_ai_model_ids` 覆盖，无需改代码。
 
 <details>
 <summary><code>GET /v1/models</code></summary>

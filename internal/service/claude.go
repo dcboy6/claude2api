@@ -401,7 +401,15 @@ func (claudeAI *ClaudeAI) SendMessage(convID, model string, prompt Prompt, attac
 		}
 		return resp.StatusCode, fmt.Errorf("发送消息 HTTP %d: %s", resp.StatusCode, bodyText)
 	}
-	return 200, parseCompletionSSE(resp.Body, onText)
+	if err := parseCompletionSSE(resp.Body, onText); err != nil {
+		var refusal *RefusalError
+		if errors.As(err, &refusal) {
+			// 安全策略拒绝属于请求内容问题，返回 400 避免客户端无限重试。
+			return 400, err
+		}
+		return 200, err
+	}
+	return 200, nil
 }
 
 // parseCompletionSSE 解析 completion 流。
@@ -415,6 +423,7 @@ func parseCompletionSSE(raw io.Reader, onText func(string)) error {
 	useToolEnd := false
 	nextLanguage := false
 	language := "md"
+	var refusal *RefusalError
 
 	emit := func(s string) {
 		if s != "" && onText != nil {
@@ -433,6 +442,9 @@ func parseCompletionSSE(raw io.Reader, onText func(string)) error {
 		}
 		if ev.Type == "error" && ev.Error.Message != "" {
 			return fmt.Errorf("upstream: %s", ev.Error.Message)
+		}
+		if ev.Type == "message_delta" && ev.Delta.StopReason == "refusal" {
+			refusal = &RefusalError{Category: ev.Delta.StopDetails.Category, Explanation: ev.Delta.StopDetails.Explanation}
 		}
 		switch ev.ContentBlock.Type {
 		case "tool_use":
@@ -509,5 +521,11 @@ func parseCompletionSSE(raw io.Reader, onText func(string)) error {
 			emit(text)
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if refusal != nil {
+		return refusal
+	}
+	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"claude2api/internal/config"
+	"claude2api/internal/modelid"
 	"claude2api/internal/repository"
 )
 
@@ -110,8 +111,7 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 			lease.ready = true
 		}
 
-		think := strings.HasSuffix(reqModel, "-thinking")
-		model := strings.TrimSuffix(reqModel, "-thinking")
+		model, think := resolveUpstream(reqModel)
 
 		if acct.OrgUUID == "" {
 			info, err := client.GetUserInfo()
@@ -147,6 +147,12 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 		convID, err := client.CreateConversation(model, think)
 		if err != nil {
 			lastErr = err
+			if strings.Contains(err.Error(), "Unsupported model") {
+				// 账号档位不支持该模型（如免费号请求 Opus）：返回 400 并给出可读提示，
+				// 避免被当成 502 让客户端反复重试。
+				res.StatusCode = 400
+				lastErr = fmt.Errorf("模型 %s（Claude.ai: %s）不被该账号支持，请确认账号档位（免费号无法使用 Pro 模型）: %w", reqModel, model, err)
+			}
 			if s.RemoveInvalidAccount && strings.Contains(err.Error(), "account_session_invalid") {
 				repository.DeleteAccount(email)
 				slog.Warn("[API] 会话失效，已立即移除账号", "email", email)
@@ -196,4 +202,17 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 		lastErr = fmt.Errorf("请求失败")
 	}
 	return res, &CompletionError{StatusCode: res.StatusCode, Err: fmt.Errorf("请求失败: %w", lastErr)}
+}
+
+// resolveUpstream maps a client model id to the Claude.ai slug and thinking flag.
+func resolveUpstream(reqModel string) (string, bool) {
+	resolved := modelid.Resolve(reqModel)
+	return applyUpstreamOverride(resolved.ID, resolved.Upstream, config.Get().ClaudeAIModelIDs), resolved.Thinking
+}
+
+func applyUpstreamOverride(id, fallback string, overrides map[string]string) string {
+	if override := strings.TrimSpace(overrides[id]); override != "" {
+		return override
+	}
+	return fallback
 }

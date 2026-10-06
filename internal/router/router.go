@@ -56,6 +56,7 @@ func NewMainEngine() *gin.Engine {
 	api.POST("/chat/completions", adapter.OpenAIChat)
 	api.POST("/responses", adapter.OpenAIResponses)
 	api.POST("/messages", adapter.AnthropicMessages)
+	api.POST("/messages/count_tokens", adapter.AnthropicCountTokens)
 
 	r.StaticFS("/static", http.FS(web.FS))
 	r.GET("/", page("index.html"))

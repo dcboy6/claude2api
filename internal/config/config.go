@@ -25,6 +25,9 @@ type Settings struct {
 	MaxChatHistoryLength       int    `json:"max_chat_history_length" yaml:"max_history_length"`
 	RemoveInvalidAccount       bool   `json:"remove_invalid_account" yaml:"remove_invalid_account"`
 	DetailedAPILog             bool   `json:"detailed_api_log" yaml:"detailed_api_log"`
+	// ClaudeAIModelIDs optionally remaps canonical public ids to Claude.ai
+	// web slugs. Only needed if a live account rejects the built-in defaults.
+	ClaudeAIModelIDs map[string]string `json:"claude_ai_model_ids,omitempty" yaml:"claude_ai_model_ids,omitempty"`
 }
 
 var (
@@ -134,6 +137,8 @@ func Update(patch map[string]any) Settings {
 			current.RemoveInvalidAccount = mustBool(v)
 		case "detailed_api_log":
 			current.DetailedAPILog = mustBool(v)
+		case "claude_ai_model_ids":
+			current.ClaudeAIModelIDs = stringMap(v)
 		}
 	}
 	writeConfig()
@@ -148,4 +153,26 @@ func mustAtoi(v any) int {
 func mustBool(v any) bool {
 	b, _ := strconv.ParseBool(strings.TrimSpace(fmt.Sprint(v)))
 	return b
+}
+
+func stringMap(v any) map[string]string {
+	out := map[string]string{}
+	raw, ok := v.(map[string]any)
+	if !ok {
+		if typed, ok := v.(map[string]string); ok {
+			for k, val := range typed {
+				if k = strings.TrimSpace(k); k != "" {
+					out[k] = strings.TrimSpace(val)
+				}
+			}
+			return out
+		}
+		return nil
+	}
+	for k, val := range raw {
+		if k = strings.TrimSpace(k); k != "" {
+			out[k] = strings.TrimSpace(fmt.Sprint(val))
+		}
+	}
+	return out
 }
