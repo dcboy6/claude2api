@@ -160,3 +160,14 @@ func TestUpstreamStatus(t *testing.T) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
+
+func TestAnthropicCountTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"claude-sonnet-5-5","messages":[{"role":"user","content":"hello world"}]}`))
+	AnthropicCountTokens(c)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"input_tokens"`) {
+		t.Fatalf("unexpected response %d %s", w.Code, w.Body.String())
+	}
+}

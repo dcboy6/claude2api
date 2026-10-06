@@ -338,3 +338,14 @@ func anthropicToolStream(c *gin.Context, model string, prompt service.Prompt) {
 	}
 	stream.stop(stopReason, tokenCount(raw))
 }
+
+// AnthropicCountTokens 本地估算 /v1/messages/count_tokens。
+// Claude Code 会调用该接口；未注册时请求会落入镜像反代被转发到 claude.ai。
+func AnthropicCountTokens(c *gin.Context) {
+	raw, err := c.GetRawData()
+	if err != nil || !json.Valid(raw) {
+		apiError(c, http.StatusBadRequest, "无效请求体")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"input_tokens": max(1, tokenCount(string(raw)))})
+}
