@@ -201,19 +201,44 @@ func anthropicNonStream(c *gin.Context, model string, prompt service.Prompt) {
 type messageStream struct {
 	*sseWriter
 	index int
+	start func() *sseWriter
 }
 
+// newMessageStream 延迟到首个事件才写响应头和 message_start，
+// 这样上游在输出前失败（如 429）时仍能返回真实 HTTP 状态码。
 func newMessageStream(c *gin.Context, model string, prompt service.Prompt) *messageStream {
-	stream := &messageStream{newSSE(c), -1}
-	stream.event("message_start", gin.H{
-		"type": "message_start",
-		"message": gin.H{
-			"id": "msg_" + shortID(), "type": "message", "role": "assistant", "model": model,
-			"content": []any{}, "stop_reason": nil,
-			"usage": gin.H{"input_tokens": tokenCount(prompt.Text), "output_tokens": 0},
-		},
-	})
+	stream := &messageStream{index: -1}
+	stream.start = func() *sseWriter {
+		w := newSSE(c)
+		w.event("message_start", gin.H{
+			"type": "message_start",
+			"message": gin.H{
+				"id": "msg_" + shortID(), "type": "message", "role": "assistant", "model": model,
+				"content": []any{}, "stop_reason": nil,
+				"usage": gin.H{"input_tokens": tokenCount(prompt.Text), "output_tokens": 0},
+			},
+		})
+		return w
+	}
 	return stream
+}
+
+func (s *messageStream) started() bool { return s.sseWriter != nil }
+
+func (s *messageStream) event(name string, payload any) {
+	if s.sseWriter == nil {
+		s.sseWriter = s.start()
+	}
+	s.sseWriter.event(name, payload)
+}
+
+// failBeforeOutput 在尚未输出任何事件时以 HTTP 错误响应，返回是否已处理。
+func (s *messageStream) failBeforeOutput(c *gin.Context, err error) bool {
+	if s.started() {
+		return false
+	}
+	apiError(c, errorStatus(err), err.Error())
+	return true
 }
 
 func (s *messageStream) open(block gin.H) {
@@ -241,10 +266,18 @@ func (s *messageStream) stop(reason string, outputTokens int) {
 
 func anthropicStream(c *gin.Context, model string, prompt service.Prompt) {
 	stream := newMessageStream(c, model, prompt)
-	stream.open(gin.H{"type": "text", "text": ""})
 	text, err := runAndCollect("messages", model, true, prompt, func(text string) {
+		if !stream.started() {
+			stream.open(gin.H{"type": "text", "text": ""})
+		}
 		stream.delta(gin.H{"type": "text_delta", "text": text})
 	})
+	if err != nil && stream.failBeforeOutput(c, err) {
+		return
+	}
+	if !stream.started() {
+		stream.open(gin.H{"type": "text", "text": ""})
+	}
 	stop := "end_turn"
 	if err != nil {
 		stream.delta(gin.H{"type": "text_delta", "text": "\n[错误] " + err.Error()})
@@ -329,6 +362,9 @@ func anthropicToolStream(c *gin.Context, model string, prompt service.Prompt) {
 			stream.close()
 		}
 	})
+	if err != nil && stream.failBeforeOutput(c, err) {
+		return
+	}
 	if err != nil {
 		// 始终新开一个 text 块承载错误信息，避免写入已关闭/非文本块。
 		stream.open(gin.H{"type": "text", "text": ""})

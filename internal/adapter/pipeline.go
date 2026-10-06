@@ -133,14 +133,18 @@ func runAndCollect(endpoint, model string, stream bool, prompt service.Prompt, e
 func runNonStream(c *gin.Context, endpoint, model string, prompt service.Prompt) (string, bool) {
 	text, err := runAndCollect(endpoint, model, false, prompt, nil)
 	if err != nil {
-		code := http.StatusBadGateway
-		var upstream *service.CompletionError
-		if errors.As(err, &upstream) && upstream.StatusCode >= 400 {
-			code = upstream.StatusCode
-		}
-		apiError(c, code, err.Error())
+		apiError(c, errorStatus(err), err.Error())
 	}
 	return text, err == nil
+}
+
+// errorStatus 把上游错误映射为 HTTP 状态码，默认 502。
+func errorStatus(err error) int {
+	var upstream *service.CompletionError
+	if errors.As(err, &upstream) && upstream.StatusCode >= 400 {
+		return upstream.StatusCode
+	}
+	return http.StatusBadGateway
 }
 
 func logCompletion(endpoint, model string, stream bool, prompt service.Prompt, output string, res service.CompletionResult, err error, start time.Time, firstTokenMs int64) {

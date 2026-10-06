@@ -171,3 +171,24 @@ func TestAnthropicCountTokens(t *testing.T) {
 		t.Fatalf("unexpected response %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestAnthropicStreamUpstreamStatusBeforeOutput(t *testing.T) {
+	old := runner
+	runner = testRunner(func(string, service.Prompt, func(string)) (service.CompletionResult, error) {
+		return service.CompletionResult{StatusCode: http.StatusTooManyRequests}, &service.CompletionError{StatusCode: http.StatusTooManyRequests, Err: errors.New("rate limited")}
+	})
+	defer func() { runner = old }()
+	for _, body := range []string{
+		`{"model":"claude-sonnet-5-5","stream":true,"messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"claude-sonnet-5-5","stream":true,"tools":[{"name":"get_weather","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"hi"}]}`,
+	} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		AnthropicMessages(c)
+		if w.Code != http.StatusTooManyRequests || strings.Contains(w.Body.String(), "message_start") {
+			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+		}
+	}
+}
