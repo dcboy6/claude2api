@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"claude2api/internal/modelid"
 	"claude2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -13,13 +14,12 @@ import (
 
 func ListModels(c *gin.Context) {
 	now := time.Now().Unix()
-	data := make([]gin.H, 0)
-	for _, id := range supportedModels {
-		for _, model := range []string{id, id + "-thinking"} {
-			data = append(data, gin.H{
-				"id": model, "object": "model", "created": now, "owned_by": "anthropic",
-			})
-		}
+	ids := modelid.ListedIDs()
+	data := make([]gin.H, 0, len(ids))
+	for _, model := range ids {
+		data = append(data, gin.H{
+			"id": model, "object": "model", "created": now, "owned_by": "anthropic",
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"object": "list", "data": data})
 }

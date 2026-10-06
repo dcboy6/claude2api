@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"claude2api/internal/config"
+	"claude2api/internal/modelid"
 	"claude2api/internal/repository"
 	"claude2api/internal/service"
 
@@ -17,12 +18,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const (
-	MaxAPIBodyBytes = 20 << 20
-	defaultModel    = "claude-sonnet-4-6"
-)
-
-var supportedModels = []string{defaultModel, "claude-haiku-4-5-20251001", "claude-sonnet-5"}
+const MaxAPIBodyBytes = 20 << 20
 
 type Message struct {
 	Role       string
@@ -47,10 +43,7 @@ func bindRequest(c *gin.Context, out any) (json.RawMessage, error) {
 }
 
 func modelOrDefault(model string) string {
-	if model == "" {
-		return defaultModel
-	}
-	return model
+	return modelid.Resolve(model).Public
 }
 
 func buildPrompt(messages []Message, images []string, tools []map[string]any, parallel bool, toolChoice json.RawMessage) (service.Prompt, error) {

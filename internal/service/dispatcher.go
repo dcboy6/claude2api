@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"claude2api/internal/config"
+	"claude2api/internal/modelid"
 	"claude2api/internal/repository"
 )
 
@@ -110,8 +111,7 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 			lease.ready = true
 		}
 
-		think := strings.HasSuffix(reqModel, "-thinking")
-		model := strings.TrimSuffix(reqModel, "-thinking")
+		model, think := resolveUpstream(reqModel)
 
 		if acct.OrgUUID == "" {
 			info, err := client.GetUserInfo()
@@ -196,4 +196,17 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 		lastErr = fmt.Errorf("请求失败")
 	}
 	return res, &CompletionError{StatusCode: res.StatusCode, Err: fmt.Errorf("请求失败: %w", lastErr)}
+}
+
+// resolveUpstream maps a client model id to the Claude.ai slug and thinking flag.
+func resolveUpstream(reqModel string) (string, bool) {
+	resolved := modelid.Resolve(reqModel)
+	return applyUpstreamOverride(resolved.ID, resolved.Upstream, config.Get().ClaudeAIModelIDs), resolved.Thinking
+}
+
+func applyUpstreamOverride(id, fallback string, overrides map[string]string) string {
+	if override := strings.TrimSpace(overrides[id]); override != "" {
+		return override
+	}
+	return fallback
 }
